@@ -1,6 +1,7 @@
 #include "prx/libSceAgcDriver/Execution/include/BdaFeatures.hpp"
 #include "prx/libSceAgcDriver/Execution/include/GuestMemory.hpp"
 #include "prx/libSceAgcDriver/Graphics/include/GuestBufferMemory.hpp"
+#include "prx/libSceAgcDriver/Graphics/include/BufferPool.hpp"
 #include "prx/libSceAgcDriver/Graphics/include/Recorder.hpp"
 #include "prx/libSceAgcDriver/Graphics/include/Resources.hpp"
 #include "prx/libSceAgcDriver/Graphics/include/ShaderResources.hpp"
@@ -1006,6 +1007,78 @@ void storageMemoryTests(Context context) {
     std::printf("reported heap budget %llu MiB with %llu MiB in use: storage image cache budget %llu MiB\n", static_cast<unsigned long long>(ReportedBudget >> 20u), static_cast<unsigned long long>(PressedUsage >> 20u), static_cast<unsigned long long>(pressed >> 20u));
 }
 
+struct RecoveryProbe {
+    PFN_vkGetDeviceProcAddr deviceProc = nullptr;
+    std::uint64_t released = 0;
+    unsigned requests = 0;
+    unsigned failures = 0;
+    bool pressure = false;
+};
+
+RecoveryProbe recovery;
+
+VkDeviceSize ReclaimForTest(VkDeviceSize bytes, bool newImage) {
+    Require(newImage, "an image allocation did not identify itself to the recovery callback");
+    ++recovery.requests;
+    Require(ReleaseTextureCaches(bytes, false) == 0, "a buffer allocation was allowed to reclaim the cache held by image creation");
+    const auto released = ReleaseTextureCaches(bytes, newImage);
+    recovery.released += released;
+    return released;
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL AllocateForTest(VkDevice device, const VkMemoryAllocateInfo* info, const VkAllocationCallbacks* allocator, VkDeviceMemory* memory) {
+    if (recovery.pressure && recovery.released == 0) {
+        ++recovery.failures;
+        return VK_ERROR_OUT_OF_DEVICE_MEMORY;
+    }
+    return reinterpret_cast<PFN_vkAllocateMemory>(recovery.deviceProc(device, "vkAllocateMemory"))(device, info, allocator, memory);
+}
+
+VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL RecoveryProc(VkDevice device, const char* name) {
+    if (std::strcmp(name, "vkAllocateMemory") == 0) return reinterpret_cast<PFN_vkVoidFunction>(AllocateForTest);
+    return recovery.deviceProc(device, name);
+}
+
+void recoveryTests(Context context, bool storage) {
+    recovery = RecoveryProbe{};
+    recovery.deviceProc = context.deviceProc;
+    context.deviceProc = RecoveryProc;
+    context.cacheReclaim = ReclaimForTest;
+    context.bufferPool.reset();
+    Block block(context);
+    if (storage) {
+        auto oldest = CachedStorageSurface(context, Resource(block.Surface(0)));
+        const auto allocated = oldest->AllocationBytes();
+        std::weak_ptr<StorageTexture> released = oldest;
+        oldest.reset();
+        auto pending = CachedStorageSurface(context, Resource(block.Surface(1)));
+        pending->MarkDirty();
+        recovery.pressure = true;
+        auto made = CachedStorageSurface(context, Resource(block.Surface(2)));
+        recovery.pressure = false;
+        Require(made != nullptr && released.expired(), "storage allocation recovery did not release its own oldest clean image");
+        Require(pending->Dirty() && StorageImageCached(context, pending.get()), "storage allocation recovery changed an image with pending results");
+        Require(recovery.released == allocated, "storage allocation recovery counted memory still held by its caller");
+        pending->Flush();
+        Require(!pending->Dirty(), "pending storage results could not be stored after memory recovery");
+    } else {
+        auto oldest = Sampled(context, block.Surface(0));
+        Require(!oldest->ViewsStorageImage(), "the sampled recovery fixture needs a snapshot allocation");
+        const auto allocated = oldest->AllocationBytes();
+        std::weak_ptr<Texture> released = oldest;
+        oldest.reset();
+        auto held = Sampled(context, block.Surface(1));
+        recovery.pressure = true;
+        auto made = Sampled(context, block.Surface(2));
+        recovery.pressure = false;
+        Require(made != nullptr && released.expired(), "sampled allocation recovery did not release its own oldest unused texture");
+        Require(Sampled(context, block.Surface(1)) == held, "sampled allocation recovery removed a texture still held by its caller");
+        Require(recovery.released == allocated, "sampled allocation recovery counted memory still held by its caller");
+    }
+    Require(recovery.requests == 1 && recovery.failures >= 1 && recovery.failures <= 2, "image allocation recovery was skipped or retried without a bound");
+    std::printf("%s image allocation recovered after %u injected failures: %llu bytes released\n", storage ? "storage" : "sampled", recovery.failures, static_cast<unsigned long long>(recovery.released));
+}
+
 }
 
 int main(int argc, char** argv) {
@@ -1018,11 +1091,12 @@ int main(int argc, char** argv) {
         }
         const bool resources = mode == "resource-admission" || mode == "resource-oversized" || mode == "resource-clear";
         const bool disableStorageImageMultisample = mode == "without-storage-image-multisample";
+        const bool recover = mode == "recover-sampled" || mode == "recover-storage";
 #ifdef _WIN32
-        if (!memory) _putenv_s("APS5_TEXTURE_CACHE_MIB", "1");
+        if (!memory) _putenv_s("APS5_TEXTURE_CACHE_MIB", recover ? "16" : "1");
         if (std::getenv("APS5_TEMPLATE_AUDIT_MS") == nullptr) _putenv_s("APS5_TEMPLATE_AUDIT_MS", "250");
 #else
-        if (!memory) setenv("APS5_TEXTURE_CACHE_MIB", "1", 1);
+        if (!memory) setenv("APS5_TEXTURE_CACHE_MIB", recover ? "16" : "1", 1);
         setenv("APS5_TEMPLATE_AUDIT_MS", "250", 0);
 #endif
         std::unique_ptr<Device> device;
@@ -1080,6 +1154,11 @@ int main(int argc, char** argv) {
             storageMemoryTests(context);
             ClearCachedTextures(context.device);
             std::puts("sampled texture memory budget tests passed");
+            return 0;
+        }
+        if (recover) {
+            std::lock_guard gpu(AgcDriver::GuestMemory::GpuMutex());
+            recoveryTests(context, mode == "recover-storage");
             return 0;
         }
         {
