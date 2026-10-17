@@ -22,6 +22,8 @@ constexpr std::size_t DeallocationStackOffset = 0x1478;
 
 std::mutex rangesLock;
 std::map<std::uintptr_t, std::uintptr_t> ranges;
+StackBounds mainHostBounds{0, 0, 0};
+bool hasMainHostBounds = false;
 
 StackBounds CurrentBounds() {
     auto* tib = reinterpret_cast<NT_TIB*>(NtCurrentTeb());
@@ -90,5 +92,30 @@ void APS5_VABI GuestStackSwitch_nid_no_patch(std::uintptr_t stackPointer) {
     (void)stackPointer;
 #endif
 }
+
+#ifdef _WIN32
+bool GuestStackIsRegistered_nid_no_patch(std::uintptr_t address) {
+    std::lock_guard lock(rangesLock);
+    const auto next = ranges.upper_bound(address);
+    if (next == ranges.begin()) return false;
+    const auto& [low, high] = *std::prev(next);
+    return address >= low && address < high;
+}
+
+void GuestStackNoteMainHostBounds_nid_no_patch(std::uintptr_t base, std::uintptr_t limit, std::uintptr_t deallocation) {
+    std::lock_guard lock(rangesLock);
+    mainHostBounds = {base, limit, deallocation};
+    hasMainHostBounds = true;
+}
+
+bool GuestStackMainHostBounds_nid_no_patch(std::uintptr_t* base, std::uintptr_t* limit, std::uintptr_t* deallocation) {
+    std::lock_guard lock(rangesLock);
+    if (!hasMainHostBounds) return false;
+    if (base) *base = mainHostBounds.base;
+    if (limit) *limit = mainHostBounds.limit;
+    if (deallocation) *deallocation = mainHostBounds.deallocation;
+    return true;
+}
+#endif
 
 }
