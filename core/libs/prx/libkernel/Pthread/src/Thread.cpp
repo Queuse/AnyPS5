@@ -38,6 +38,10 @@ static constexpr int SCE_OK = 0;
 
 static constexpr std::size_t DEFAULT_STACK_SIZE = 1u << 20;
 static constexpr std::size_t HOST_STACK_MARGIN = 1u << 20;
+#ifdef _WIN32
+// The native stack only runs thread entry/exit (plus SEH dispatch); the guest entry runs on the arena stack.
+static constexpr std::size_t NATIVE_STACK_RESERVE = 256 * 1024;
+#endif
 static constexpr int DETACH_DETACHED = 1;
 static constexpr std::size_t THREAD_NAME_CAPACITY = 32;
 
@@ -85,7 +89,7 @@ static GuestThreadState& CurrentGuestState() {
 static std::mutex stackLock;
 static std::map<PthreadPrivate*, std::pair<std::uintptr_t, std::uintptr_t>> liveStacks;
 static std::map<std::uintptr_t, std::size_t> protectedStackPages;
-#if defined(__linux__)
+#if defined(__linux__) || defined(_WIN32)
 struct GuestStackMapping {
     std::uintptr_t mappingEnd;
     std::uintptr_t stackStart;
@@ -179,11 +183,61 @@ static void RetireGuestStack(PthreadPrivate* thread) {
 #else
 #if defined(_WIN32)
 static constexpr std::size_t GUEST_STACK_GUARD = PS5_PAGE_SIZE;
+// Freed stacks stay committed so a later thread with the same size reuses them instead of
+// unmapping and mapping again; exit-retired stacks are still unmapped once signalled.
+static constexpr std::size_t WIN_STACK_CACHE_LIMIT = 4;
+
+struct RetiredWinStack {
+    void* address;
+    std::size_t bytes;
+    void* handle;
+};
+
+static std::mutex retiredWinStacksLock;
+static std::vector<RetiredWinStack> retiredWinStacks;
+
+static bool ReuseWinStack(std::size_t bytes, void** out) {
+    void* candidate = nullptr;
+    {
+        std::lock_guard lock(retiredWinStacksLock);
+        for (auto it = retiredWinStacks.begin(); it != retiredWinStacks.end(); ++it) {
+            if (it->handle == nullptr && it->bytes == bytes) {
+                candidate = it->address;
+                retiredWinStacks.erase(it);
+                break;
+            }
+        }
+    }
+    if (candidate == nullptr) return false;
+    const auto base = reinterpret_cast<std::uintptr_t>(candidate);
+    for (auto cursor = base; cursor < base + bytes;) {
+        MEMORY_BASIC_INFORMATION memory{};
+        if (VirtualQuery(reinterpret_cast<void*>(cursor), &memory, sizeof(memory)) != sizeof(memory) || memory.State != MEM_COMMIT || memory.RegionSize == 0) return false;
+        cursor = reinterpret_cast<std::uintptr_t>(memory.BaseAddress) + memory.RegionSize;
+    }
+    try {
+        if (DoMprotect(candidate, bytes, 3) != 0 || DoMprotect(candidate, GUEST_STACK_GUARD, 0) != 0) {
+            DoMunmap(candidate, bytes);
+            return false;
+        }
+    } catch (...) {
+        DoMunmap(candidate, bytes);
+        throw;
+    }
+    *out = candidate;
+    return true;
+}
 
 static void AllocateGuestStack(PthreadPrivate* thread, std::size_t usableBytes) {
     const std::size_t bytes = (usableBytes + PS5_PAGE_SIZE - 1) / PS5_PAGE_SIZE * PS5_PAGE_SIZE + GUEST_STACK_GUARD;
     void* stack = nullptr;
-    if (DoMapAnon(&stack, bytes, 3, 0) != 0)
+    if (ReuseWinStack(bytes, &stack)) {
+        thread->guestStack = stack;
+        thread->guestStackBytes = bytes;
+        return;
+    }
+    // Commit the whole stack as one host allocation so VirtualQuery spans the guard range.
+    if (DoMapAnon(&stack, bytes, 3, 0, PS5_PAGE_SIZE, false, false, bytes) != 0)
         throw std::runtime_error("scePthreadCreate: cannot map the guest thread stack");
     if (DoMprotect(stack, GUEST_STACK_GUARD, 0) != 0) {
         DoMunmap(stack, bytes);
@@ -195,26 +249,32 @@ static void AllocateGuestStack(PthreadPrivate* thread, std::size_t usableBytes) 
 
 static void FreeGuestStack(PthreadPrivate* thread) {
     if (thread->guestStack == nullptr) return;
-    DoMunmap(thread->guestStack, thread->guestStackBytes);
+    void* const mapping = thread->guestStack;
+    const std::size_t bytes = thread->guestStackBytes;
     thread->guestStack = nullptr;
     thread->guestStackBytes = 0;
+    UnregisterGuestStackMapping(mapping);
+    bool cached = false;
+    {
+        std::lock_guard lock(retiredWinStacksLock);
+        std::size_t cachedCount = 0;
+        for (const auto& entry : retiredWinStacks) {
+            if (entry.handle == nullptr) ++cachedCount;
+        }
+        if (cachedCount < WIN_STACK_CACHE_LIMIT) {
+            retiredWinStacks.push_back({mapping, bytes, nullptr});
+            cached = true;
+        }
+    }
+    if (!cached) DoMunmap(mapping, bytes);
 }
-
-struct RetiredWinStack {
-    void* address;
-    std::size_t bytes;
-    void* handle;
-};
-
-static std::mutex retiredWinStacksLock;
-static std::vector<RetiredWinStack> retiredWinStacks;
 
 static void ReapRetiredWinStacks() {
     std::vector<RetiredWinStack> ready;
     {
         std::lock_guard lock(retiredWinStacksLock);
         for (auto it = retiredWinStacks.begin(); it != retiredWinStacks.end();) {
-            if (WaitForSingleObject(static_cast<HANDLE>(it->handle), 0) == WAIT_OBJECT_0) {
+            if (it->handle != nullptr && WaitForSingleObject(static_cast<HANDLE>(it->handle), 0) == WAIT_OBJECT_0) {
                 ready.push_back(*it);
                 it = retiredWinStacks.erase(it);
             } else {
@@ -224,6 +284,7 @@ static void ReapRetiredWinStacks() {
     }
     for (const auto& stack : ready) {
         CloseHandle(static_cast<HANDLE>(stack.handle));
+        UnregisterGuestStackMapping(stack.address);
         DoMunmap(stack.address, stack.bytes);
     }
 }
@@ -423,7 +484,7 @@ bool GuestThreadStack(std::uintptr_t address, std::uintptr_t* start, std::uintpt
 }
 
 bool GuestThreadStackHostRangeOverlaps(std::uintptr_t start, std::uintptr_t end) {
-#if defined(__linux__)
+#if defined(__linux__) || defined(_WIN32)
     std::lock_guard lock(guestStackMappingsLock);
     auto it = guestStackMappings.upper_bound(start);
     if (it != guestStackMappings.begin()) --it;
@@ -904,6 +965,8 @@ static unsigned __stdcall StartNativeThread(void* opaque) {
         }
         self->stackAddress = reinterpret_cast<void*>(reportedLow);
         self->threadId = std::this_thread::get_id();
+        RegisterGuestStackMapping(self);
+        RegisterStack(self);
         CurrentGuestState().current = self;
         if (!self->name.empty()) {
             const std::wstring description(self->name.begin(), self->name.end());
@@ -1013,7 +1076,7 @@ int APS5_VABI scePthreadCreate(Pthread* thread, const PthreadAttr* attr, Pthread
     GetSystemInfo(&system);
     if (p->stackSize < 16384 || p->stackSize > std::numeric_limits<unsigned>::max() - HOST_STACK_MARGIN - system.dwPageSize)
         throw std::runtime_error("scePthreadCreate: invalid Windows stack size");
-    const std::size_t nativeStack = (p->stackSize + HOST_STACK_MARGIN + system.dwPageSize - 1) / system.dwPageSize * system.dwPageSize;
+    const std::size_t nativeStack = (NATIVE_STACK_RESERVE + system.dwPageSize - 1) / system.dwPageSize * system.dwPageSize;
     ReapRetiredWinStacks();
     AllocateGuestStack(p.get(), p->stackSize + HOST_STACK_MARGIN);
     auto native = std::make_unique<NativeThreadArgs>(NativeThreadArgs{std::move(args), start.get_future(), {}});
