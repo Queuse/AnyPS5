@@ -39,7 +39,6 @@ static constexpr int SCE_OK = 0;
 static constexpr std::size_t DEFAULT_STACK_SIZE = 1u << 20;
 static constexpr std::size_t HOST_STACK_MARGIN = 1u << 20;
 #ifdef _WIN32
-// The native stack only runs thread entry/exit (plus SEH dispatch); the guest entry runs on the arena stack.
 static constexpr std::size_t NATIVE_STACK_RESERVE = 256 * 1024;
 #endif
 static constexpr int DETACH_DETACHED = 1;
@@ -183,8 +182,6 @@ static void RetireGuestStack(PthreadPrivate* thread) {
 #else
 #if defined(_WIN32)
 static constexpr std::size_t GUEST_STACK_GUARD = PS5_PAGE_SIZE;
-// Freed stacks stay committed so a later thread with the same size reuses them instead of
-// unmapping and mapping again; exit-retired stacks are still unmapped once signalled.
 static constexpr std::size_t WIN_STACK_CACHE_LIMIT = 4;
 
 struct RetiredWinStack {
@@ -236,7 +233,6 @@ static void AllocateGuestStack(PthreadPrivate* thread, std::size_t usableBytes) 
         thread->guestStackBytes = bytes;
         return;
     }
-    // Commit the whole stack as one host allocation so VirtualQuery spans the guard range.
     if (DoMapAnon(&stack, bytes, 3, 0, PS5_PAGE_SIZE, false, false, bytes) != 0)
         throw std::runtime_error("scePthreadCreate: cannot map the guest thread stack");
     if (DoMprotect(stack, GUEST_STACK_GUARD, 0) != 0) {
