@@ -1106,7 +1106,9 @@ void recoveryTests(Context context, const std::string& mode) {
         Require(made != nullptr && made->SharedStorageSource() == source, "sampled copy allocation recovery did not serve the pending storage image");
         Require(released.expired(), "sampled copy allocation recovery did not release its own oldest unused texture");
         Require(source->Dirty() && StorageImageCached(context, source.get()), "sampled copy allocation recovery changed or evicted an image with pending results");
-        Require(Sampled(context, block.Surface(1)) == held, "sampled copy allocation recovery removed a texture still held by its caller");
+        Require(!held->Released() && held.use_count() == 2, "sampled copy allocation recovery removed a texture still held by its caller");
+        const auto refreshed = Sampled(context, block.Surface(1));
+        Require(refreshed != nullptr && (refreshed == held || refreshed->ViewsStorageImage()), "sampled copy cache refresh did not serve the surface");
         Require(recovery.released == allocated, "sampled copy allocation recovery counted memory still held by its caller");
         source->Flush();
         Require(!source->Dirty(), "pending storage results could not be stored after memory recovery");
