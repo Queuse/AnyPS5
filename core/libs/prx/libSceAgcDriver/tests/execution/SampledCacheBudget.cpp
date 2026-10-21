@@ -6,6 +6,7 @@
 #include "prx/libSceAgcDriver/Graphics/include/Resources.hpp"
 #include "prx/libSceAgcDriver/Graphics/include/ShaderResources.hpp"
 #include "prx/libSceAgcDriver/Graphics/include/Texture.hpp"
+#include "prx/libSceAgcDriver/Graphics/include/TextureFormat.hpp"
 #include "prx/libSceAgcDriver/Graphics/include/TextureDetiler.hpp"
 #include "prx/libSceAgcDriver/Graphics/include/TextureCache.hpp"
 #include "prx/libSceAgcDriver/Graphics/include/PlaceholderImages.hpp"
@@ -1078,8 +1079,9 @@ void recoveryTests(Context context, const std::string& mode) {
     } else {
         const bool srgb = mode == "recover-srgb";
         if (srgb) {
-            context.srgbDecodeFormats = 0;
-            context.srgbCopyFormats |= 1u;
+            context.srgbDecodeFormats = SrgbDecodeFormats(context.formatProperties, context.physical);
+            context.srgbCopyFormats = SrgbCopyFormats(context.formatProperties, context.physical, context.srgbDecodeFormats);
+            Require(SrgbExpandsToRgba8(context, 128u), "the device cannot serve the sRGB expansion copy fixture");
         }
         auto oldest = Sampled(context, block.Surface(0));
         Require(!oldest->ViewsStorageImage(), "the sampled recovery fixture needs a snapshot allocation");
