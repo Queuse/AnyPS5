@@ -788,7 +788,7 @@ void ImageCacheReclaim() {
         mock.results = results;
         const auto requests = reclaimMock.requests;
         const auto before = mock.attempts;
-        const auto memory = AllocateImageMemory(context, allocation, 3, "vkAllocateMemory texture", newImage);
+        const auto memory = AllocateImageMemory(context, allocation, 3, "vkAllocateMemory texture", nullptr, newImage);
         Expect(reclaimMock.requests == requests + 1 && reclaimMock.external == VK_NULL_HANDLE, "a texture refused device memory did not release the texture caches before retrying");
         Expect(mock.attempts == before + results.size() + 1, "image recovery or host fallback exceeded its bounded attempts");
         const auto type = mock.memoryTypes.at(memory);
@@ -912,7 +912,7 @@ void DeviceBindingFailures() {
 VkDeviceMemory reclaimImage = VK_NULL_HANDLE;
 const Context* reclaimImageContext = nullptr;
 
-VkDeviceSize mockImageReclaim(VkDeviceSize) {
+VkDeviceSize mockImageReclaim(VkDeviceSize, bool) {
     if (reclaimImage == VK_NULL_HANDLE) return 0;
     ReleaseImageMemory(*reclaimImageContext, reclaimImage, 10 * MiB, 0);
     reclaimImage = VK_NULL_HANDLE;
