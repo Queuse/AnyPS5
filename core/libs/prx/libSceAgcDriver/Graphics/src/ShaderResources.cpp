@@ -1265,6 +1265,7 @@ std::uint64_t StorageTextureBudget(const VkPhysicalDeviceMemoryProperties& memor
 
 std::uint64_t NextStorageBudget(const std::uint64_t current, const std::uint64_t floor, const std::uint64_t cap, const std::uint64_t reportedBudget, const std::uint64_t usage, const std::uint64_t evictions) {
     if (reportedBudget == 0) return current;
+    if (current > cap) return std::max(floor, cap);
     const auto reserve = std::max<std::uint64_t>(2048ull << 20u, reportedBudget / 8u);
     const auto step = std::max<std::uint64_t>(current / 8u, 64ull << 20u);
     if (usage + reserve > reportedBudget) return std::max(floor, current > step ? current - step : floor);

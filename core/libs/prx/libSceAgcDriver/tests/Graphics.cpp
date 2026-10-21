@@ -11366,6 +11366,17 @@ int main(int argc, char** argv) {
             Require(AgcDriver::Graphics::NextStorageBudget(floor, floor, cap, reported, 2500u * MiB, 16u) == 1152u * MiB, "an 8 GiB storage budget grows with 16 evictions");
             Require(AgcDriver::Graphics::NextStorageBudget(2048u * MiB, floor, cap, reported, 6000u * MiB, 0u) == 1792u * MiB, "an 8 GiB storage budget under memory pressure shrinks one step");
         }
+        {
+            constexpr std::uint64_t MiB = 1ull << 20u;
+            const std::uint64_t floor = 512u * MiB;
+            const std::uint64_t cap = 1200u * MiB;
+            const std::uint64_t reported = 7600u * MiB;
+            Require(AgcDriver::Graphics::NextStorageBudget(2048u * MiB, floor, cap, reported, 2500u * MiB, 0u) == cap, "a storage budget above its cap clamps immediately without evictions");
+            Require(AgcDriver::Graphics::NextStorageBudget(2048u * MiB, floor, cap, reported, 2500u * MiB, 16u) == cap, "a storage budget above its cap clamps immediately with evictions");
+            Require(AgcDriver::Graphics::NextStorageBudget(2048u * MiB, floor, cap, reported, 6000u * MiB, 0u) == cap, "a storage budget above its cap clamps immediately under memory pressure");
+            Require(AgcDriver::Graphics::NextStorageBudget(2048u * MiB, floor, 400u * MiB, reported, 2500u * MiB, 0u) == floor, "a storage budget above its cap clamps to floor when the cap is below floor");
+            Require(AgcDriver::Graphics::NextStorageBudget(2048u * MiB, floor, cap, 0u, 0u, 1000u) == 2048u * MiB, "a storage budget above its cap without a reported budget does not change");
+        }
         std::cout << "Graphics validation tests passed\n";
         return 0;
     } catch (const std::exception& error) {
