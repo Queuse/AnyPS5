@@ -8100,6 +8100,31 @@ void hostImportMemoryTypeTests() {
     }
     remove(block);
 
+    const auto preferCached = [&](std::span<const VkMemoryPropertyFlags> flags, std::uint32_t offered, std::uint32_t expected) {
+        add(block);
+        {
+            mock = MockVulkan{};
+            auto context = mockContext();
+            context.hostImportAlignment = half;
+            context.dmaBufImport = false;
+            context.memory.memoryTypeCount = static_cast<std::uint32_t>(flags.size());
+            for (std::size_t index = 0; index < flags.size(); ++index) context.memory.memoryTypes[index] = {flags[index], 0};
+            mock.bufferMemoryTypeBits = (1u << flags.size()) - 1u;
+            mock.hostPointerTypeBits = offered;
+            GuestBufferMemory memory(context);
+            memory.AcquireRegistered();
+            Require(HostImportCovers(context, reinterpret_cast<std::uintptr_t>(block), half), "the cached host memory range is not imported");
+            Require(allocated(expected), "the import did not prefer a cached coherent memory type");
+            for (std::uint32_t index = 0; index < flags.size(); ++index) Require(index == expected || !allocated(index), "the import used another memory type beside the cached coherent candidate");
+        }
+        remove(block);
+    };
+    constexpr VkMemoryPropertyFlags coherent = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+    const std::array<VkMemoryPropertyFlags, 3> integrated{VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, coherent, coherent | VK_MEMORY_PROPERTY_HOST_CACHED_BIT};
+    preferCached(integrated, 0b111u, 2);
+    const std::array<VkMemoryPropertyFlags, 5> discrete{VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, 0, 0, coherent, coherent | VK_MEMORY_PROPERTY_HOST_CACHED_BIT};
+    preferCached(discrete, 0b11000u, 4);
+
     add(other);
     {
         mock = MockVulkan{};
