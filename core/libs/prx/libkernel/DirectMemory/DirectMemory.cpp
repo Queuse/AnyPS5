@@ -1089,7 +1089,12 @@ int DoMapAnon(void** addr, size_t len, int prot, int flags, size_t alignment, bo
     ValidateOutput(addr);
     if (len == 0 || (len & (PS5_PAGE_SIZE - 1)) != 0) return SCE_KERNEL_ERROR_EINVAL;
 #ifdef _WIN32
-        std::uintptr_t stackStart = 0;
+    if (allowStackReplacement && (flags & GuestMapFixedFlag) != 0) {
+        ValidateRange(*addr, len, ValidateAlignment(alignment));
+        const auto start = reinterpret_cast<std::uintptr_t>(*addr);
+        if (GuestThreadStackHostRangeOverlaps(start, start + len)) return SCE_KERNEL_ERROR_EINVAL;
+    }
+    std::uintptr_t stackStart = 0;
     std::uintptr_t stackEnd = 0;
     const bool isStack = GuestThreadStack(reinterpret_cast<std::uintptr_t>(*addr), &stackStart, &stackEnd);
     if (allowStackReplacement && (flags & GuestMapFixedFlag) != 0 && (isStack || !KernelArena::Get().Owns(*addr, len))) {
