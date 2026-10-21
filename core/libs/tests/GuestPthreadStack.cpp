@@ -37,6 +37,7 @@ int APS5_VABI sceKernelUsleep_nid_postfix(KernelUseconds microseconds);
 int APS5_VABI sceKernelReserveVirtualRange(void** addr, std::size_t len, int flags, std::size_t alignment);
 int APS5_VABI sceKernelMunmap(std::uint64_t addr, std::size_t len);
 void* APS5_VABI mmap_nid_postfix(void* addr, std::size_t len, int prot, int flags, int fd, std::int64_t offset) noexcept;
+bool GuestArenaContains_nid_postfix(const void* pointer, std::size_t bytes);
 #endif
 #ifdef __linux__
 int APS5_VABI scePthreadDetach(Pthread thread);
@@ -280,6 +281,29 @@ int main() {
         Require(sceKernelMunmap(reinterpret_cast<std::uint64_t>(bytes), page) == 0);
         Require(bytes[page * 2] == 0x84);
         Require(sceKernelMunmap(reinterpret_cast<std::uint64_t>(bytes + page * 2), page) == 0);
+    }
+    {
+        constexpr std::size_t page = 0x4000;
+        void* reservation = VirtualAlloc(nullptr, page * 3, MEM_RESERVE, PAGE_NOACCESS);
+        Require(reservation != nullptr);
+        Require(!GuestArenaContains_nid_postfix(reservation, page * 3));
+        auto* bytes = static_cast<unsigned char*>(reservation);
+        Require(mmap_nid_postfix(bytes, page * 3, 3, 0x1012, -1, 0) == bytes);
+        bytes[0] = 0x42;
+        bytes[page * 2] = 0x84;
+        Require(sceKernelMunmap(reinterpret_cast<std::uint64_t>(bytes + page), page) == 0);
+        Require(bytes[0] == 0x42);
+        Require(bytes[page * 2] == 0x84);
+        MEMORY_BASIC_INFORMATION info{};
+        Require(VirtualQuery(bytes, &info, sizeof(info)) == sizeof(info) && info.State == MEM_COMMIT);
+        Require(VirtualQuery(bytes + page, &info, sizeof(info)) == sizeof(info) && info.State == MEM_RESERVE);
+        Require(VirtualQuery(bytes + page * 2, &info, sizeof(info)) == sizeof(info) && info.State == MEM_COMMIT);
+        Require(sceKernelMunmap(reinterpret_cast<std::uint64_t>(bytes), page) == 0);
+        Require(bytes[page * 2] == 0x84);
+        Require(VirtualQuery(bytes, &info, sizeof(info)) == sizeof(info) && info.State == MEM_RESERVE);
+        Require(VirtualQuery(bytes + page * 2, &info, sizeof(info)) == sizeof(info) && info.State == MEM_COMMIT);
+        Require(sceKernelMunmap(reinterpret_cast<std::uint64_t>(bytes + page * 2), page) == 0);
+        Require(VirtualQuery(bytes, &info, sizeof(info)) == sizeof(info) && info.State == MEM_FREE);
     }
 #endif
 }
