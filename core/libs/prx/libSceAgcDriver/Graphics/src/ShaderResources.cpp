@@ -1237,13 +1237,6 @@ std::shared_ptr<StorageTexture> cachedStorageTexture(const Context& context, std
 
 }
 
-// The storage cache's cap: half the heap, and no more than what is left of the device budget once
-// the space outside both texture caches, the headroom the sampled cache may still claim and the
-// reserve the growth check keeps are taken out. Growing into that space pushes the heap to its
-// budget, and the allocations that follow (sampled textures, device buffers, staging) fail before
-// the next budget read can shrink this cache again. The sampled cache's budget covers both caches,
-// so only its remaining headroom is held back; a sampled cache at or over its budget holds back
-// nothing and the storage cache may take the space.
 std::uint64_t StorageBudgetCap(const std::uint64_t heapBytes, const std::uint64_t reportedBudget, const std::uint64_t usage, const std::uint64_t cacheBytes, const std::uint64_t sampledRemaining, const std::uint64_t floor) {
     std::uint64_t cap = heapBytes / 2u;
     if (reportedBudget != 0) {
