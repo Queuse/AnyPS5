@@ -327,10 +327,10 @@ private:
     std::uint8_t* memory = nullptr;
 };
 
-std::array<std::uint32_t, 8> Descriptor(std::uint64_t address, std::uint32_t side = Side) {
+std::array<std::uint32_t, 8> Descriptor(std::uint64_t address, std::uint32_t side = Side, std::uint32_t format = Format32UInt) {
     return {
         static_cast<std::uint32_t>(address >> 8u),
-        static_cast<std::uint32_t>((address >> 40u) & 0xffu) | (Format32UInt << 20u) | (((side - 1u) & 3u) << 30u),
+        static_cast<std::uint32_t>((address >> 40u) & 0xffu) | (format << 20u) | (((side - 1u) & 3u) << 30u),
         ((side - 1u) >> 2u) | ((side - 1u) << 14u),
         0xfacu | (TileR64KBX << 20u) | (Type2D << 28u),
         0u,
@@ -340,13 +340,13 @@ std::array<std::uint32_t, 8> Descriptor(std::uint64_t address, std::uint32_t sid
     };
 }
 
-std::shared_ptr<Texture> Sampled(const Context& context, std::uint64_t address, std::uint32_t side = Side) {
-    const auto words = Descriptor(address, side);
+std::shared_ptr<Texture> Sampled(const Context& context, std::uint64_t address, std::uint32_t side = Side, std::uint32_t format = Format32UInt) {
+    const auto words = Descriptor(address, side, format);
     return CachedSampledTexture(context, words);
 }
 
-GuestTextureResource Resource(std::uint64_t address, std::uint32_t side = Side) {
-    const auto words = Descriptor(address, side);
+GuestTextureResource Resource(std::uint64_t address, std::uint32_t side = Side, std::uint32_t format = Format32UInt) {
+    const auto words = Descriptor(address, side, format);
     return DecodeTextureResource(words);
 }
 
@@ -1039,13 +1039,14 @@ VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL RecoveryProc(VkDevice device, const cha
     return recovery.deviceProc(device, name);
 }
 
-void recoveryTests(Context context, bool storage) {
+void recoveryTests(Context context, const std::string& mode) {
     recovery = RecoveryProbe{};
     recovery.deviceProc = context.deviceProc;
     context.deviceProc = RecoveryProc;
     context.cacheReclaim = ReclaimForTest;
     context.bufferPool.reset();
     Block block(context);
+    const bool storage = mode == "recover-storage";
     if (storage) {
         auto oldest = CachedStorageSurface(context, Resource(block.Surface(0)));
         const auto allocated = oldest->AllocationBytes();
@@ -1061,7 +1062,7 @@ void recoveryTests(Context context, bool storage) {
         Require(recovery.released == allocated, "storage allocation recovery counted memory still held by its caller");
         pending->Flush();
         Require(!pending->Dirty(), "pending storage results could not be stored after memory recovery");
-    } else {
+    } else if (mode == "recover-sampled") {
         auto oldest = Sampled(context, block.Surface(0));
         Require(!oldest->ViewsStorageImage(), "the sampled recovery fixture needs a snapshot allocation");
         const auto allocated = oldest->AllocationBytes();
@@ -1074,9 +1075,43 @@ void recoveryTests(Context context, bool storage) {
         Require(made != nullptr && released.expired(), "sampled allocation recovery did not release its own oldest unused texture");
         Require(Sampled(context, block.Surface(1)) == held, "sampled allocation recovery removed a texture still held by its caller");
         Require(recovery.released == allocated, "sampled allocation recovery counted memory still held by its caller");
+    } else {
+        const bool srgb = mode == "recover-srgb";
+        if (srgb) {
+            context.srgbDecodeFormats = 0;
+            context.srgbCopyFormats |= 1u;
+        }
+        auto oldest = Sampled(context, block.Surface(0));
+        Require(!oldest->ViewsStorageImage(), "the sampled recovery fixture needs a snapshot allocation");
+        const auto allocated = oldest->AllocationBytes();
+        std::weak_ptr<Texture> released = oldest;
+        oldest.reset();
+        auto held = Sampled(context, block.Surface(1));
+        const auto side = srgb ? 1024u : 512u;
+        const auto format = srgb ? 128u : 43u;
+        const auto sourceWords = Descriptor(block.Surface(4), side, format);
+        const auto sourceResource = DecodeTextureResource(sourceWords);
+        auto source = CachedStorageSurface(context, sourceResource);
+        source->MarkDirty();
+        if (srgb) {
+            Require(Texture::CanSrgbExpandFrom(context, *source, sourceResource), "the storage surface cannot serve an sRGB expansion copy");
+        } else {
+            Require(Texture::CanRepackCopyFrom(*source, sourceResource), "the storage surface cannot serve a repacked copy");
+        }
+        recovery.pressure = true;
+        auto made = CachedSampledTexture(context, sourceWords);
+        recovery.pressure = false;
+        Require(made != nullptr && made->SharedStorageSource() == source, "sampled copy allocation recovery did not serve the pending storage image");
+        Require(released.expired(), "sampled copy allocation recovery did not release its own oldest unused texture");
+        Require(source->Dirty() && StorageImageCached(context, source.get()), "sampled copy allocation recovery changed or evicted an image with pending results");
+        Require(Sampled(context, block.Surface(1)) == held, "sampled copy allocation recovery removed a texture still held by its caller");
+        Require(recovery.released == allocated, "sampled copy allocation recovery counted memory still held by its caller");
+        source->Flush();
+        Require(!source->Dirty(), "pending storage results could not be stored after memory recovery");
     }
     Require(recovery.requests == 1 && recovery.failures >= 1 && recovery.failures <= 2, "image allocation recovery was skipped or retried without a bound");
-    std::printf("%s image allocation recovered after %u injected failures: %llu bytes released\n", storage ? "storage" : "sampled", recovery.failures, static_cast<unsigned long long>(recovery.released));
+    const char* label = storage ? "storage" : mode == "recover-srgb" ? "sRGB" : mode == "recover-repack" ? "repacked" : "sampled";
+    std::printf("%s image allocation recovered after %u injected failures: %llu bytes released\n", label, recovery.failures, static_cast<unsigned long long>(recovery.released));
 }
 
 }
@@ -1091,7 +1126,7 @@ int main(int argc, char** argv) {
         }
         const bool resources = mode == "resource-admission" || mode == "resource-oversized" || mode == "resource-clear";
         const bool disableStorageImageMultisample = mode == "without-storage-image-multisample";
-        const bool recover = mode == "recover-sampled" || mode == "recover-storage";
+        const bool recover = mode == "recover-sampled" || mode == "recover-storage" || mode == "recover-srgb" || mode == "recover-repack";
 #ifdef _WIN32
         if (!memory) _putenv_s("APS5_TEXTURE_CACHE_MIB", recover ? "16" : "1");
         if (std::getenv("APS5_TEMPLATE_AUDIT_MS") == nullptr) _putenv_s("APS5_TEMPLATE_AUDIT_MS", "250");
@@ -1158,7 +1193,7 @@ int main(int argc, char** argv) {
         }
         if (recover) {
             std::lock_guard gpu(AgcDriver::GuestMemory::GpuMutex());
-            recoveryTests(context, mode == "recover-storage");
+            recoveryTests(context, mode);
             return 0;
         }
         {
