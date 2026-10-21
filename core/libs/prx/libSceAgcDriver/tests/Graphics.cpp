@@ -8058,11 +8058,6 @@ void copiedWriterIndirectOverlapTests() {
     ::operator delete(copiedBlock, std::align_val_t{half});
 }
 
-/// The guest range behind a host import is the guest's own memory, which the CPU reads, and an
-/// imported range cannot be invalidated: the import must take a memory type that guarantees host
-/// coherency, a cached one when the device offers it, and a device whose candidates are all
-/// non-coherent must not import the range at all (issue #6512: a store the GPU made through such
-/// an import stayed invisible to the CPU). The range is then copied instead of read stale.
 void hostImportMemoryTypeTests() {
     using namespace AgcDriver::Graphics;
 
