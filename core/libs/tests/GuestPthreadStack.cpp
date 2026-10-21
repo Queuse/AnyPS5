@@ -34,6 +34,9 @@ Pthread APS5_VABI scePthreadSelf();
 void APS5_VABI scePthreadExit(void* retval);
 int APS5_VABI scePthreadCancel(Pthread thread);
 int APS5_VABI sceKernelUsleep_nid_postfix(KernelUseconds microseconds);
+int APS5_VABI sceKernelReserveVirtualRange(void** addr, std::size_t len, int flags, std::size_t alignment);
+int APS5_VABI sceKernelMunmap(std::uint64_t addr, std::size_t len);
+void* APS5_VABI mmap_nid_postfix(void* addr, std::size_t len, int prot, int flags, int fd, std::int64_t offset) noexcept;
 #endif
 #ifdef __linux__
 int APS5_VABI scePthreadDetach(Pthread thread);
@@ -262,6 +265,21 @@ int main() {
         DWORD code = 0;
         Require(GetExitCodeThread(handle, &code) != 0 && code == 0);
         Require(CloseHandle(handle) != 0);
+    }
+    {
+        constexpr std::size_t page = 0x4000;
+        void* reservation = nullptr;
+        Require(sceKernelReserveVirtualRange(&reservation, page * 3, 0, 0) == 0);
+        auto* bytes = static_cast<unsigned char*>(reservation);
+        Require(mmap_nid_postfix(bytes, page * 3, 3, 0x1012, -1, 0) == bytes);
+        bytes[0] = 0x42;
+        bytes[page * 2] = 0x84;
+        Require(sceKernelMunmap(reinterpret_cast<std::uint64_t>(bytes + page), page) == 0);
+        Require(bytes[0] == 0x42);
+        Require(bytes[page * 2] == 0x84);
+        Require(sceKernelMunmap(reinterpret_cast<std::uint64_t>(bytes), page) == 0);
+        Require(bytes[page * 2] == 0x84);
+        Require(sceKernelMunmap(reinterpret_cast<std::uint64_t>(bytes + page * 2), page) == 0);
     }
 #endif
 }
