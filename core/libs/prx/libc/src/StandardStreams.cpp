@@ -28,18 +28,30 @@ std::intptr_t StandardHandle(int descriptor) {
     return handle;
 }
 
-const bool standardDescriptorsOpen = [] {
-    for (int descriptor = 0; descriptor <= 2; ++descriptor) {
-        const std::intptr_t handle = StandardHandle(descriptor);
-        if (handle != -1 && handle != NoStreamHandle) continue;
-        const int opened = ::_open("NUL", (descriptor == 0 ? _O_RDONLY : _O_WRONLY) | _O_BINARY);
-        if (opened > descriptor) {
-            ::_dup2(opened, descriptor);
-            ::_close(opened);
+}
+
+extern "C" void PrepareStandardStreams_nid_no_patch() {
+    static const bool ready = [] {
+        for (int descriptor = 0; descriptor <= 2; ++descriptor) {
+            const std::intptr_t handle = StandardHandle(descriptor);
+            if (handle != -1 && handle != NoStreamHandle) continue;
+            const int opened = ::_open("NUL", (descriptor == 0 ? _O_RDONLY : _O_WRONLY) | _O_BINARY);
+            if (opened < 0) throw std::runtime_error("cannot open NUL for a missing standard descriptor");
+            if (opened > descriptor) {
+                const int moved = ::_dup2(opened, descriptor);
+                ::_close(opened);
+                if (moved != 0) throw std::runtime_error("cannot restore a missing standard descriptor");
+            }
+            auto* const stream = __acrt_iob_func(descriptor);
+            if (::_close(descriptor) != 0 || ::_wfreopen(L"NUL", descriptor == 0 ? L"rb" : L"wb", stream) != stream || ::_fileno(stream) != descriptor)
+                throw std::runtime_error("cannot attach a standard stream to its NUL descriptor");
         }
-    }
-    return true;
-}();
+        return true;
+    }();
+    static_cast<void>(ready);
+}
+
+namespace {
 #else
 const bool standardDescriptorsOpen = [] {
     for (int descriptor = 0; descriptor <= 2; ++descriptor) {

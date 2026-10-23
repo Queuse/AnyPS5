@@ -364,7 +364,7 @@ if(BUILD_TESTING)
         target_link_libraries(guest_closed_standard_descriptors_windows_tests PRIVATE libkernel libc)
         configure_windows_unwind(guest_closed_standard_descriptors_windows_tests)
         add_test(NAME guest_closed_standard_descriptors_windows COMMAND guest_closed_standard_descriptors_windows_tests)
-        set_tests_properties(guest_closed_standard_descriptors_windows PROPERTIES TIMEOUT 40 ENVIRONMENT_MODIFICATION
+        set_tests_properties(guest_closed_standard_descriptors_windows PROPERTIES TIMEOUT 30 ENVIRONMENT_MODIFICATION
             "PATH=path_list_prepend:$<TARGET_FILE_DIR:libkernel>")
     endif()
     add_test_executable(guest_truncate_tests ${LIBS_INCLUDE_DIR}/tests/GuestTruncate.cpp)
