@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <string>
 #include <windows.h>
+#include <shellapi.h>
 #include <io.h>
 
 extern "C" {
@@ -30,11 +31,14 @@ int main() {
         CloseHandle(report);
         return code;
     };
-    const DWORD size = GetEnvironmentVariableW(L"ANYPS5_TEST_LIBC", nullptr, 0);
-    if (size == 0) return finish(2, "missing ANYPS5_TEST_LIBC\n");
-    std::wstring library(size, L'\0');
-    if (GetEnvironmentVariableW(L"ANYPS5_TEST_LIBC", library.data(), size) != size - 1) return finish(3, "cannot read ANYPS5_TEST_LIBC\n");
-    library.resize(size - 1);
+    int count = 0;
+    auto** const arguments = CommandLineToArgvW(GetCommandLineW(), &count);
+    if (!arguments || count != 2) {
+        if (arguments) LocalFree(arguments);
+        return finish(2, "expected one libc path argument\n");
+    }
+    const std::wstring library(arguments[1]);
+    LocalFree(arguments);
     for (int descriptor : {1, 2}) {
         if (::_fileno(__acrt_iob_func(descriptor)) != descriptor || ::_close(descriptor) != 0)
             return finish(4, "cannot close an inherited standard descriptor\n");
