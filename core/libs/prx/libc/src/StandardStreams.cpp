@@ -35,6 +35,16 @@ extern "C" void PrepareStandardStreams_nid_no_patch() {
         for (int descriptor = 0; descriptor <= 2; ++descriptor) {
             const std::intptr_t handle = StandardHandle(descriptor);
             if (handle != -1 && handle != NoStreamHandle) continue;
+            auto* const stream = __acrt_iob_func(descriptor);
+            const int existing = ::_fileno(stream);
+            if (existing >= 0) {
+                const std::intptr_t existingHandle = StandardHandle(existing);
+                if (existingHandle != -1 && existingHandle != NoStreamHandle) {
+                    if (::_dup2(existing, descriptor) != 0)
+                        throw std::runtime_error("cannot restore a standard descriptor from its stream");
+                    continue;
+                }
+            }
             const int opened = ::_open("NUL", (descriptor == 0 ? _O_RDONLY : _O_WRONLY) | _O_BINARY);
             if (opened < 0) throw std::runtime_error("cannot open NUL for a missing standard descriptor");
             if (opened > descriptor) {
@@ -42,7 +52,6 @@ extern "C" void PrepareStandardStreams_nid_no_patch() {
                 ::_close(opened);
                 if (moved != 0) throw std::runtime_error("cannot restore a missing standard descriptor");
             }
-            auto* const stream = __acrt_iob_func(descriptor);
             if (::_fileno(stream) != descriptor && ::_close(descriptor) != 0)
                 throw std::runtime_error("cannot release a restored standard descriptor");
             if (::_wfreopen(L"NUL", descriptor == 0 ? L"rb" : L"wb", stream) != stream || ::_fileno(stream) != descriptor)
