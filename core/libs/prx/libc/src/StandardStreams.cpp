@@ -43,7 +43,9 @@ extern "C" void PrepareStandardStreams_nid_no_patch() {
                 if (moved != 0) throw std::runtime_error("cannot restore a missing standard descriptor");
             }
             auto* const stream = __acrt_iob_func(descriptor);
-            if (::_close(descriptor) != 0 || ::_wfreopen(L"NUL", descriptor == 0 ? L"rb" : L"wb", stream) != stream || ::_fileno(stream) != descriptor)
+            if (::_fileno(stream) != descriptor && ::_close(descriptor) != 0)
+                throw std::runtime_error("cannot release a restored standard descriptor");
+            if (::_wfreopen(L"NUL", descriptor == 0 ? L"rb" : L"wb", stream) != stream || ::_fileno(stream) != descriptor)
                 throw std::runtime_error("cannot attach a standard stream to its NUL descriptor");
         }
         return true;

@@ -366,6 +366,17 @@ if(BUILD_TESTING)
         add_test(NAME guest_closed_standard_descriptors_windows COMMAND guest_closed_standard_descriptors_windows_tests)
         set_tests_properties(guest_closed_standard_descriptors_windows PROPERTIES TIMEOUT 30 ENVIRONMENT_MODIFICATION
             "PATH=path_list_prepend:$<TARGET_FILE_DIR:libkernel>")
+        add_test_executable(guest_closed_standard_streams_load_windows_tests ${LIBS_INCLUDE_DIR}/tests/GuestClosedStandardStreamsLoadWindows.cpp)
+        target_include_directories(guest_closed_standard_streams_load_windows_tests PRIVATE ${LIBS_INCLUDE_DIR})
+        if(MINGW)
+            target_compile_options(guest_closed_standard_streams_load_windows_tests PRIVATE -fasynchronous-unwind-tables)
+        endif()
+        add_dependencies(guest_closed_standard_streams_load_windows_tests libc)
+        configure_windows_unwind(guest_closed_standard_streams_load_windows_tests)
+        add_test(NAME guest_closed_standard_streams_load_windows COMMAND guest_closed_standard_streams_load_windows_tests)
+        set_tests_properties(guest_closed_standard_streams_load_windows PROPERTIES TIMEOUT 10
+            ENVIRONMENT "ANYPS5_TEST_LIBC=$<TARGET_FILE:libc>"
+            ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:libc>")
     endif()
     add_test_executable(guest_truncate_tests ${LIBS_INCLUDE_DIR}/tests/GuestTruncate.cpp)
     target_include_directories(guest_truncate_tests PRIVATE ${LIBS_INCLUDE_DIR})
