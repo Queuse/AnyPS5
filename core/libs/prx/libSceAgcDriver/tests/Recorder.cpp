@@ -2410,6 +2410,57 @@ bool settleInitialDccTests(const Device& device) {
         }
     }
     std::cout << "write watch: Windows private imports stay watched after a settle read; imports under 1 MiB wait for a deferred settle\n";
+    for (const std::size_t count : {256u, 257u, 1025u}) {
+        const auto bytes = count * unit;
+        auto* block = static_cast<std::uint8_t*>(AllocateWatched(bytes, unit));
+        Require(block != nullptr, "(m) cannot allocate adjacent pending imports");
+        const auto address = reinterpret_cast<std::uint64_t>(block);
+        struct Release {
+            const Context& context;
+            std::uint8_t* block;
+            std::size_t bytes;
+            std::size_t registered = 0;
+            ~Release() {
+                {
+                    GuestAllocations::Mutation mutation;
+                    for (std::size_t index = 0; index < registered; ++index) mutation.Remove(block + index * unit);
+                }
+                HostImportFor(context, reinterpret_cast<std::uint64_t>(block), unit);
+                SetHostImportWindow(0);
+                ReleaseWatched(block, bytes);
+            }
+        } release{base, block, bytes};
+        std::memset(block, 0x11, bytes);
+        SetHostImportWindow(unit);
+        {
+            GuestAllocations::Mutation mutation;
+            for (std::size_t index = 0; index < count; ++index) {
+                mutation.Add(block + index * unit, unit, true, true, true);
+                ++release.registered;
+            }
+        }
+        for (std::size_t index = 0; index < count; ++index) {
+            const auto at = address + index * unit;
+            const auto* import = HostImportFor(base, at, unit);
+            Require(import != nullptr && import->base == at && import->bytes == unit && import->unwatched,
+                    "(m) an adjacent 64 KiB import did not start with its settle pending");
+        }
+        {
+            std::lock_guard gpu(GpuMutex());
+            Require(!Watched(address, bytes), "(m) adjacent pending imports were already watched");
+            const auto before = HostImportSettles();
+            Require(WatchedAfterSettle(base, address, bytes),
+                    "(m) one synchronous settle left part of " + std::to_string(count) + " adjacent imports unwatched");
+            const auto after = HostImportSettles();
+            BumpCollectEpoch();
+            const auto collected = CollectWrites(address, bytes);
+            Require(collected != 0, "(m) adjacent settled imports were not collected");
+            static_cast<volatile std::uint8_t*>(block)[bytes - 1] = 0x22;
+            CollectWritesUncached(address, bytes);
+            Require(!UnchangedSince(address, bytes, collected), "(m) a CPU write after the final import settled was missed");
+            std::cout << "(m) " << count << " adjacent pending imports settled: " << after.submitted - before.submitted << " reads submitted\n";
+        }
+    }
     TextureDetiler detiler(base);
     auto context = base;
     context.detiler = &detiler;
