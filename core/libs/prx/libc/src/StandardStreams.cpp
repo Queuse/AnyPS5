@@ -44,7 +44,9 @@ extern "C" void PrepareStandardStreams_nid_no_patch() {
                 if (moved != 0) throw std::runtime_error("cannot restore a missing standard descriptor");
             }
             auto* const stream = __acrt_iob_func(descriptor);
-            if (::_close(descriptor) != 0 || ::_wfreopen(L"NUL", descriptor == 0 ? L"rb" : L"wb", stream) != stream || ::_fileno(stream) != descriptor)
+            if (::_fileno(stream) != descriptor && ::_close(descriptor) != 0)
+                throw std::runtime_error("cannot release a restored standard descriptor");
+            if (::_wfreopen(L"NUL", descriptor == 0 ? L"rb" : L"wb", stream) != stream || ::_fileno(stream) != descriptor)
                 throw std::runtime_error("cannot attach a standard stream to its NUL descriptor");
         }
         return true;
@@ -133,7 +135,7 @@ int APS5_VABI getc_unlocked_nid_postfix(FileStream* stream) {
 #ifdef _WIN32
     const int result = _fgetc_nolock(native);
 #else
-    const int result = ::getc_unlocked(native);
+    const int result = getc_unlocked(native);
 #endif
     stream->SyncUnlockedStatus();
     stream->KeepDirectoryReadError(result == -1);
@@ -156,7 +158,7 @@ int APS5_VABI putc_unlocked_nid_postfix(int value, FileStream* stream) {
 #ifdef _WIN32
     const int result = _fputc_nolock(value, GetNativeStream(stream));
 #else
-    const int result = ::putc_unlocked(value, GetNativeStream(stream));
+    const int result = putc_unlocked(value, GetNativeStream(stream));
 #endif
     stream->SyncUnlockedStatus();
     return result;
