@@ -1,3 +1,4 @@
+#include "prx/libc/include/FileStream.hpp"
 #include "prx/libc/include/general/VabiMacros.hpp"
 #include <cstdio>
 #include <cstring>
@@ -7,6 +8,16 @@
 
 extern "C" {
 int APS5_VABI fcntl_nid_postfix(int, int, ...);
+extern FileStream* __stdinp_nid_postfix;
+extern FileStream* __stdoutp_nid_postfix;
+extern FileStream* __stderrp_nid_postfix;
+int APS5_VABI fileno_nid_postfix(FileStream*);
+int APS5_VABI fputc_nid_postfix(int, FileStream*);
+int APS5_VABI fflush_nid_postfix(FileStream*);
+int APS5_VABI fgetc_nid_postfix(FileStream*);
+int APS5_VABI feof_nid_postfix(FileStream*);
+int APS5_VABI ferror_nid_postfix(FileStream*);
+void APS5_VABI clearerr_nid_postfix(FileStream*);
 }
 
 namespace {
@@ -26,6 +37,20 @@ int Child(const char* closed) {
         if (fcntl_nid_postfix(descriptor, GuestGetDescriptorFlags) != 0) return 76 + descriptor;
         const int expected = descriptor == 0 ? GuestReadOnly : GuestWriteOnly;
         if ((fcntl_nid_postfix(descriptor, GuestGetFlags) & GuestAccessMode) != expected) return 79 + descriptor;
+        std::FILE* const host = descriptor == 0 ? stdin : descriptor == 1 ? stdout : stderr;
+        FileStream* const guest = descriptor == 0 ? __stdinp_nid_postfix : descriptor == 1 ? __stdoutp_nid_postfix : __stderrp_nid_postfix;
+        if (::_fileno(host) != descriptor) return 82 + descriptor;
+        if (guest->GuestState().descriptor != descriptor) return 96 + descriptor;
+        if (fileno_nid_postfix(guest) != descriptor) return 85 + descriptor;
+        if (descriptor == 0) {
+            if (std::fgetc(host) != EOF || std::feof(host) == 0 || std::ferror(host) != 0) return 88;
+            std::clearerr(host);
+            if (fgetc_nid_postfix(guest) != EOF || feof_nid_postfix(guest) == 0 || ferror_nid_postfix(guest) != 0) return 89;
+            clearerr_nid_postfix(guest);
+        } else {
+            if (std::fputc('x', host) == EOF || std::fflush(host) != 0 || std::ferror(host) != 0) return 90 + descriptor;
+            if (fputc_nid_postfix('x', guest) == EOF || fflush_nid_postfix(guest) != 0 || ferror_nid_postfix(guest) != 0) return 93 + descriptor;
+        }
     }
     return 0;
 }
@@ -57,6 +82,7 @@ int main(int argc, char** argv) {
     const struct { bool input, output, error; const char* name; } cases[] = {
         {true, false, false, "stdin"},
         {false, true, false, "stdout"},
+        {false, false, true, "stderr"},
         {true, true, true, "all three"},
     };
     for (const auto& test : cases) {
