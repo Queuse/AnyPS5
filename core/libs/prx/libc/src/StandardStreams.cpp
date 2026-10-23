@@ -5,14 +5,42 @@
 #include <cstdint>
 #include <stdexcept>
 #ifdef _WIN32
+#include <fcntl.h>
 #include <io.h>
+#include <stdlib.h>
 #else
 #include <fcntl.h>
 #include <unistd.h>
 #endif
 
+#ifdef _WIN32
+extern "C" _invalid_parameter_handler _set_thread_local_invalid_parameter_handler(_invalid_parameter_handler);
+#endif
+
 namespace {
-#ifndef _WIN32
+#ifdef _WIN32
+constexpr std::intptr_t NoStreamHandle = -2;
+
+std::intptr_t StandardHandle(int descriptor) {
+    const auto previous = _set_thread_local_invalid_parameter_handler([](const wchar_t*, const wchar_t*, const wchar_t*, unsigned int, std::uintptr_t) {});
+    const std::intptr_t handle = ::_get_osfhandle(descriptor);
+    _set_thread_local_invalid_parameter_handler(previous);
+    return handle;
+}
+
+const bool standardDescriptorsOpen = [] {
+    for (int descriptor = 0; descriptor <= 2; ++descriptor) {
+        const std::intptr_t handle = StandardHandle(descriptor);
+        if (handle != -1 && handle != NoStreamHandle) continue;
+        const int opened = ::_open("NUL", (descriptor == 0 ? _O_RDONLY : _O_WRONLY) | _O_BINARY);
+        if (opened > descriptor) {
+            ::_dup2(opened, descriptor);
+            ::_close(opened);
+        }
+    }
+    return true;
+}();
+#else
 const bool standardDescriptorsOpen = [] {
     for (int descriptor = 0; descriptor <= 2; ++descriptor) {
         if (::fcntl(descriptor, F_GETFD) != -1 || errno != EBADF) continue;
