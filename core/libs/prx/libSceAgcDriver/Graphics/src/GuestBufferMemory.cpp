@@ -1169,7 +1169,7 @@ void settleImportsNow(const Context& context, HostImports& state, std::uint64_t 
             return settle != state.pendingSettles.end() && settle->second.phase == SettlePhase::Wanted;
         });
     };
-    if (wanted()) {
+    while (wanted()) {
         if (std::all_of(deviceSettle.batches.begin(), deviceSettle.batches.end(), [](const SettleBatch& batch) { return batch.busy; })) {
             for (const auto& batch : deviceSettle.batches) waitSettleBatch(deviceSettle, context.device, batch);
             reapSettleBatches(context, state);
