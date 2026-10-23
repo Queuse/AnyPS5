@@ -433,6 +433,16 @@ if(MINGW OR CMAKE_SYSTEM_NAME STREQUAL "Linux")
 endif()
 
 if(BUILD_TESTING)
+    add_test_executable(agc_driver_unsupported_diagnostics_tests tests/UnsupportedDiagnostics.cpp)
+    target_include_directories(agc_driver_unsupported_diagnostics_tests PRIVATE ${LIBS_INCLUDE_DIR})
+    target_link_libraries(agc_driver_unsupported_diagnostics_tests PRIVATE libSceAgcDriver)
+    configure_windows_unwind(agc_driver_unsupported_diagnostics_tests)
+    add_test(NAME agc_driver_unsupported_diagnostics COMMAND agc_driver_unsupported_diagnostics_tests)
+    if(WIN32)
+        set_tests_properties(agc_driver_unsupported_diagnostics PROPERTIES ENVIRONMENT_MODIFICATION
+            "PATH=path_list_prepend:$<TARGET_FILE_DIR:libSceAgcDriver>")
+    endif()
+
     add_test_executable(agc_driver_draw_program_trace_tests
             tests/DrawProgramTrace.cpp
             Execution/src/Driver/Draw/DrawProgramTrace.cpp
@@ -459,6 +469,16 @@ if(WIN32)
 endif()
 
 if(BUILD_TESTING)
+    add_test_executable(agc_driver_nop_data_packet_tests tests/NopDataWritePacket.cpp)
+    target_include_directories(agc_driver_nop_data_packet_tests PRIVATE ${LIBS_INCLUDE_DIR})
+    target_link_libraries(agc_driver_nop_data_packet_tests PRIVATE libSceAgcDriver)
+    configure_windows_unwind(agc_driver_nop_data_packet_tests)
+    add_test(NAME agc_driver_nop_data_packet COMMAND agc_driver_nop_data_packet_tests)
+    if(WIN32)
+        set_tests_properties(agc_driver_nop_data_packet PROPERTIES ENVIRONMENT_MODIFICATION
+            "PATH=path_list_prepend:$<TARGET_FILE_DIR:libc>")
+    endif()
+
     add_test_executable(agc_frame_dump_io_tests tests/FrameDumpIo.cpp)
     target_include_directories(agc_frame_dump_io_tests PRIVATE ${LIBS_INCLUDE_DIR})
     target_link_libraries(agc_frame_dump_io_tests PRIVATE libc)

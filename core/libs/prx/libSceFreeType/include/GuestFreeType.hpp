@@ -18,6 +18,13 @@ struct GuestVector {
     std::int64_t y;
 };
 
+struct GuestMatrix {
+    std::int64_t xx;
+    std::int64_t xy;
+    std::int64_t yx;
+    std::int64_t yy;
+};
+
 struct GuestBBox {
     std::int64_t xMin;
     std::int64_t yMin;
@@ -38,6 +45,15 @@ struct GuestCharMapRec {
     std::int32_t encoding;
     std::uint16_t platform_id;
     std::uint16_t encoding_id;
+};
+
+struct GuestSfntName {
+    std::uint16_t platform_id;
+    std::uint16_t encoding_id;
+    std::uint16_t language_id;
+    std::uint16_t name_id;
+    unsigned char* string;
+    std::uint32_t string_len;
 };
 
 struct GuestSizeMetrics {
@@ -149,9 +165,11 @@ struct GuestFaceRec {
     void* internal;
 };
 
+static_assert(sizeof(GuestMatrix) == 32 && offsetof(GuestMatrix, xy) == 8 && offsetof(GuestMatrix, yx) == 16 && offsetof(GuestMatrix, yy) == 24);
 static_assert(sizeof(GuestGeneric) == 16 && offsetof(GuestGeneric, finalizer) == 8);
 static_assert(sizeof(GuestBitmapSize) == 32 && offsetof(GuestBitmapSize, size) == 8);
 static_assert(sizeof(GuestCharMapRec) == 16 && offsetof(GuestCharMapRec, platform_id) == 12);
+static_assert(sizeof(GuestSfntName) == 24 && offsetof(GuestSfntName, string) == 8 && offsetof(GuestSfntName, string_len) == 16);
 static_assert(sizeof(GuestSizeMetrics) == 56 && offsetof(GuestSizeMetrics, x_scale) == 8);
 static_assert(sizeof(GuestSizeRec) == 88 && offsetof(GuestSizeRec, metrics) == 24);
 static_assert(sizeof(GuestBitmap) == 40 && offsetof(GuestBitmap, buffer) == 16 && offsetof(GuestBitmap, palette) == 32);
