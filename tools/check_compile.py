@@ -10,6 +10,8 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext
 from pathlib import Path
 
+MAX_RESPONSE_FILE_DEPTH = 20
+
 CPP = (".cpp", ".cc", ".cxx", ".c")
 DROP = ("-c", "-MD", "-MMD", "-MP", "-fsyntax-only", "-fno-syntax-only", "-save-temps", "--save-temps",
         "-save-temps=cwd", "-save-temps=obj", "--save-temps=cwd", "--save-temps=obj")
@@ -24,7 +26,6 @@ WITH_VALUE = ("-I", "-L", "-F", "-B", "-D", "-U", "-x", "-include", "--include",
 WITHOUT_VALUE = (*DROP, *PREPROCESSING, "-S", "-fsyntax-only", "-Werror", "-Wall", "-Wextra",
                  "-pedantic", "-pedantic-errors", "-pthread", "-pipe", "-v")
 JOINED_OPTIONS = ("-I", "-L", "-F", "-B", "-D", "-U", "-O", "-g", "-W")
-MAX_RESPONSE_FILE_DEPTH = 20
 
 
 def capture(command, cwd=None, encoding="utf-8"):
@@ -210,8 +211,12 @@ def expand_response_files(arguments, directory, seen=frozenset()):
     return expanded
 
 
+
 def preprocessor_arguments(argument):
-    options = iter(argument[4:].split(","))
+    forwarded = argument[4:].split(",")
+    if any(option.startswith("@") for option in forwarded):
+        raise ValueError(f"unsupported forwarded compiler option response file in {argument}")
+    options = iter(forwarded)
     kept = []
     for option in options:
         if option in ("-MD", "-MMD", "-MF", "-MT", "-MQ", "--write-dependencies", "--write-user-dependencies"):
@@ -222,29 +227,15 @@ def preprocessor_arguments(argument):
                       "--print-missing-file-dependencies") or option.startswith(("-MF", "-MT", "-MQ")):
             continue
         kept.append(option)
-        if option in ("-D", "-U", "-A", "-I", "-include", "-imacros", "-isystem", "-iquote", "-idirafter",
-                      "-iprefix", "-iwithprefix", "-iwithprefixbefore", "-isysroot", "-imultilib", "-F",
-                      "--define-macro", "--undefine-macro", "--assert", "--include", "--imacros", "--include-directory",
-                      "--include-directory-after", "--include-prefix", "--include-with-prefix",
-                      "--include-with-prefix-after", "--include-with-prefix-before", "--dump", "--embed-directory"):
-            value = next(options, None)
-            if value is not None:
-                kept.append(value)
-    return "-Wp," + ",".join(kept) if kept else None
-
-
-def validate_preprocessor_arguments(argument):
-    forwarded = argument[4:].split(",")
-    if any(option.startswith("@") for option in forwarded):
-        raise ValueError(f"unsupported forwarded compiler option response file in {argument}")
-    options = iter(forwarded)
-    for option in options:
         if option in ("-D", "-U", "-I", "-F", "-include", "--include", "-imacros", "--imacros",
                       "-isystem", "-iquote", "-idirafter", "-isysroot"):
-            if not next(options, None):
+            value = next(options, None)
+            if not value:
                 raise ValueError(f"missing operand for {option} in {argument}")
+            kept.append(value)
         elif not (option.startswith(("-D", "-U", "-I", "-F")) and len(option) > 2):
             raise ValueError(f"unsupported forwarded compiler option {option} in {argument}")
+    return "-Wp," + ",".join(kept) if kept else None
 
 
 def syntax_arguments(arguments, directory, source):
@@ -280,7 +271,6 @@ def syntax_arguments(arguments, directory, source):
             continue
         if not positional and argument.startswith("-Wp,"):
             if forwarded := preprocessor_arguments(argument):
-                validate_preprocessor_arguments(forwarded)
                 trimmed.append(forwarded)
             index += 1
             continue

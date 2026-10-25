@@ -80,9 +80,14 @@ class CheckCompilePreprocessorTests(unittest.TestCase):
             with self.subTest(flag=flag):
                 self.assertEqual(check_compile.syntax_arguments(["cc", flag, str(source)], Path.cwd(), source),
                                  ["cc", "-fsyntax-only", expected, str(source)])
-        flag = "-Wp,-unknown-option"
-        with self.assertRaisesRegex(ValueError, "unsupported forwarded compiler option"):
-            check_compile.syntax_arguments(["cc", flag, str(source)], Path.cwd(), source)
+
+    def test_unsupported_options_and_response_operands_are_still_rejected(self):
+        source = Path("unit.c").resolve()
+        for flag in ("-Wp,-unknown-option", "-Wp,-MD,unit.d,-E", "-Wp,-MD,unit.d,-I,@operand.rsp",
+                     "-Wp,-MD,@operand.rsp"):
+            with self.subTest(flag=flag):
+                with self.assertRaisesRegex(ValueError, "unsupported forwarded compiler option"):
+                    check_compile.syntax_arguments(["cc", flag, str(source)], Path.cwd(), source)
 
     def test_missing_dependency_values_are_rejected(self):
         source = Path("unit.c").resolve()
