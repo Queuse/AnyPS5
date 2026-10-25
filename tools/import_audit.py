@@ -416,6 +416,7 @@ def audit_host_dependencies(direct, libraries, modules, windows=()):
         stack = [(name, [root, name]) for name in reversed(direct[root])]
         while stack:
             name, chain = stack.pop()
+            name = strip_origin(name)
             if chain[-2] in windows:
                 matches = folded.get(name.lower(), ())
                 if len(matches) > 1:
@@ -672,6 +673,10 @@ def check_conservation(references, records):
         raise AuditError(f"conservation failed: {references} references in, {classified} classified, unknown classes {unknown}")
 
 
+def strip_origin(name):
+    return name[len("$ORIGIN/"):] if name.startswith("$ORIGIN/") else name
+
+
 MODULE_FILE_SUFFIXES = (".debug_prx", ".suprx", ".sprx", ".prx")
 
 
@@ -695,7 +700,7 @@ class ModuleNames(set):
         self.stems = {module_stem(name, fold) for name in self}
 
     def __contains__(self, library):
-        return isinstance(library, str) and module_stem(library, self.fold) in self.stems
+        return isinstance(library, str) and module_stem(strip_origin(library), self.fold) in self.stems
 
 
 def classify(nid, library, providers, stubs, modules, partial=frozenset()):
