@@ -794,7 +794,7 @@ class ImportAuditTests(unittest.TestCase):
                 module.write_bytes(exporting("AAAAAAAAAAA"))
                 try:
                     write_registry(registry, [("AAAAAAAAAAA", needed)])
-                    import_audit.needed_registry_path(registry).write_text(json.dumps([needed]), encoding="utf-8")
+                    import_audit.needed_registry_path(registry).write_text("[]", encoding="utf-8")
                     code, _, err = work.run(registry, "--json", str(report), "--strict-providers")
                     self.assertEqual((code, err), (0, ""))
                     data = json.loads(report.read_text(encoding="utf-8"))
@@ -958,7 +958,7 @@ class ImportAuditTests(unittest.TestCase):
                         (work.modules / "Different.prx").write_bytes(image)
                         (work.modules / "consumer.prx").write_bytes(dependency)
                         write_registry(registry, [("AAAAAAAAAAA", alias), ("AAAAAAAAAAA", "Different.prx")])
-                        (work.root / "game.needed.json").write_text(json.dumps([alias]))
+                        (work.root / "game.needed.json").write_text("[]")
                         code, _, err = work.run(registry, "--json", str(result))
                         self.assertEqual((code, err), (0, ""))
                         data = json.loads(result.read_text())
@@ -966,6 +966,31 @@ class ImportAuditTests(unittest.TestCase):
                         self.assertEqual(data["references"], 4)
                         self.assertEqual(data["unique_by_class"], {"implemented": 2, "partial": 0, "stub": 0, "absent": 0, "module": 2})
                         self.assertIsNone(data["stops"][0]["nid"])
+
+    def test_needed_registry_requires_filenames_not_declared_module_aliases(self):
+        work = self.work
+        registry, result = work.root / "game.registry.json", work.root / "audit.json"
+        needed = import_audit.needed_registry_path(registry)
+        for windows in (False, True):
+            (work.libs / "libc.prx").write_bytes(build_pe([]) if windows else build_elf([]))
+            for tag in (14, 0x6100000d, 0x61000043):
+                for prefix in ("", "$ORIGIN/"):
+                    with self.subTest(windows=windows, tag=hex(tag), prefix=prefix):
+                        alias = "Declared.prx" if tag == 14 else "Declared"
+                        (work.modules / "Provider.prx").write_bytes(build_elf(
+                            [("AAAAAAAAAAA", 1, GLOBAL_FUNCTION)], module_names=[(tag, alias)]))
+                        write_registry(registry, [("AAAAAAAAAAA", "Declared.prx")])
+                        missing = prefix + "Declared.prx"
+                        needed.write_text(json.dumps([missing, missing]), encoding="utf-8")
+                        code, _, err = work.run(registry, "--json", str(result))
+                        self.assertEqual((code, err), (1, ""))
+                        data = json.loads(result.read_text())
+                        self.assertEqual(data["imports"][0]["class"], "module")
+                        self.assertEqual(data["missing_host_dependencies"], [
+                            {"importer": str(needed), "chain": [str(needed), "Declared.prx" if windows else missing]}])
+                        for resolved in ([], [prefix + "Provider.prx"]):
+                            needed.write_text(json.dumps(resolved), encoding="utf-8")
+                            self.assertEqual(work.run(registry)[0], 0)
 
     def test_host_dependencies_require_filenames_not_module_identities(self):
         work = self.work
@@ -1041,7 +1066,7 @@ class ImportAuditTests(unittest.TestCase):
                 for name in requested:
                     with self.subTest(windows=windows, name=name):
                         write_registry(registry, [("AAAAAAAAAAA", name)])
-                        import_audit.needed_registry_path(registry).write_text(json.dumps([name]), encoding="utf-8")
+                        import_audit.needed_registry_path(registry).write_text("[]", encoding="utf-8")
                         code, _, err = work.run(registry, "--json", str(result))
                         self.assertEqual((code, err), (0, ""))
                         data = json.loads(result.read_text())
@@ -1083,7 +1108,7 @@ class ImportAuditTests(unittest.TestCase):
                 with self.subTest(tag=hex(tag), alias=alias):
                     needed = "$ORIGIN/" + alias
                     write_registry(registry, [("AAAAAAAAAAA", needed)])
-                    import_audit.needed_registry_path(registry).write_text(json.dumps([needed]), encoding="utf-8")
+                    import_audit.needed_registry_path(registry).write_text(json.dumps([] if expected == 0 else [needed]), encoding="utf-8")
                     code, _, err = work.run(registry, "--json", str(result))
                     self.assertEqual((code, err), (expected, ""))
                     data = json.loads(result.read_text())
@@ -1114,7 +1139,7 @@ class ImportAuditTests(unittest.TestCase):
             with self.subTest(name=name):
                 needed = "$ORIGIN/" + name
                 write_registry(registry, [("AAAAAAAAAAA", needed)])
-                import_audit.needed_registry_path(registry).write_text(json.dumps([needed]), encoding="utf-8")
+                import_audit.needed_registry_path(registry).write_text(json.dumps([] if expected == 0 else [needed]), encoding="utf-8")
                 code, _, err = work.run(registry, "--json", str(result))
                 self.assertEqual((code, err), (expected, ""))
                 data = json.loads(result.read_text())

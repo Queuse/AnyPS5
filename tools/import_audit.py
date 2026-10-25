@@ -761,7 +761,7 @@ def classify(nid, library, providers, stubs, modules, partial=frozenset()):
     return "implemented"
 
 
-def audit(imports, exports, stubs, libraries, modules, module_imports=None, module_exports=None, *, needed_libraries=(), windows_libraries=(), partial=frozenset()):
+def host_library_resolver(windows_libraries):
     windows_names = {}
     for library in windows_libraries:
         windows_names.setdefault(library.casefold(), set()).add(library)
@@ -777,6 +777,12 @@ def audit(imports, exports, stubs, libraries, modules, module_imports=None, modu
                     if len(candidates) == 1:
                         return next(iter(candidates))
         return name
+
+    return system_library
+
+
+def audit(imports, exports, stubs, libraries, modules, module_imports=None, module_exports=None, *, needed_libraries=(), windows_libraries=(), partial=frozenset()):
+    system_library = host_library_resolver(windows_libraries)
 
     def available(name):
         return name in modules or system_library(name) in libraries
@@ -999,7 +1005,8 @@ def main(argv=None):
                 raise AuditError(f"{args.json}: JSON output would overwrite an input file")
         registries = [(registry, read_registry(registry)) for registry in args.registries]
         imports = [entry for _, entries in registries for entry in entries]
-        needed = sorted({library for path in dependency_registries for library in read_needed_registry(path)})
+        registry_dependencies = {str(path): sorted(set(read_needed_registry(path))) for path in dependency_registries}
+        needed = sorted({library for libraries in registry_dependencies.values() for library in libraries})
         exports, libraries = built_libraries(args.libs)
         host_dependencies, windows = built_host_dependencies(args.libs)
         module_imports, module_exports, modules = read_modules(args.modules, set(needed) | {library for _, library, _ in imports if library}, windows=bool(windows))
@@ -1008,7 +1015,11 @@ def main(argv=None):
         modules = ModuleNames(host_modules, fold=bool(windows), exact=modules.exact)
         stubs, partial = source_stub_classes(args.source)
         records, missing = audit(imports, exports, stubs, libraries, modules, module_imports, module_exports, needed_libraries=needed, windows_libraries=windows, partial=partial)
-        missing_hosts = audit_host_dependencies(host_dependencies, libraries, host_modules, windows)
+        registry_library = host_library_resolver(windows)
+        registry_hosts = {path: [registry_library(strip_origin(name)) if windows else name for name in names]
+                          for path, names in registry_dependencies.items()}
+        missing_hosts = audit_host_dependencies({**host_dependencies, **registry_hosts}, libraries, host_modules,
+                                                windows | set(registry_hosts) if windows else windows)
         if args.names:
             attach_names(records, load_names(args.names))
         summary = summarize(records, sum(record["references"] for record in records), missing, missing_hosts)
