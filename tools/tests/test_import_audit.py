@@ -1378,6 +1378,25 @@ class ImportAuditTests(unittest.TestCase):
                 self.assertEqual(len(chain_reads), len(symbols))
                 self.assertEqual(set(chain_reads), set(range(chain_offset, chain_offset + len(symbols) * 4, 4)))
 
+    def test_sectionless_gnu_hash_chains_preserve_declared_module_names(self):
+        symbols = [(f"symbol{index}", int(index != 0), GLOBAL_FUNCTION) for index in range(32)]
+        declared = ((14, "Declared.prx"), (0x6100000d, "RuntimeIdentity"), (0x61000043, "AlternateIdentity"))
+        expected = ({"symbol0": False}, {name for name, section, _ in symbols if section}, {"libSceA.prx"})
+        for buckets, terminator in (((1,) * 32, None), (tuple(range(32, 0, -1)), None), ((17, 1, 0, 17), 16)):
+            with self.subTest(buckets=buckets, terminator=terminator):
+                image = bytearray(build_sectionless_elf(symbols, ["libSceA.prx"], True, declared, gnu_buckets=buckets))
+                chain_offset = gnu_hash_chain_offset(image)
+                if terminator is not None:
+                    struct.pack_into("<I", image, chain_offset + (terminator - 1) * 4, 1)
+                names = {"sonames": set(), "identities": set()}
+                with patch.object(import_audit, "unpack", wraps=import_audit.unpack) as unpack:
+                    self.assertEqual(import_audit.elf_program_dynamic_symbols(Path("named.prx"), image, names), expected)
+                self.assertEqual(names, {"sonames": {"Declared.prx"}, "identities": {"RuntimeIdentity", "AlternateIdentity"}})
+                chain_reads = [call.args[2] for call in unpack.call_args_list
+                               if call.args[0] == "<I" and chain_offset <= call.args[2] < chain_offset + len(symbols) * 4]
+                self.assertEqual(len(chain_reads), len(symbols))
+                self.assertEqual(set(chain_reads), set(range(chain_offset, chain_offset + len(symbols) * 4, 4)))
+
     def test_sectionless_elf_gnu_hash_empty_buckets(self):
         for buckets in ((), (0,), (0, 0, 0)):
             with self.subTest(buckets=buckets):
