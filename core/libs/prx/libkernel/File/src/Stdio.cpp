@@ -1064,7 +1064,7 @@ int APS5_VABI lstat_nid_postfix(const char* path, FileStat* sb) {
     if (const int error = PathError(path, copy)) return PosixFailure(error);
     path = copy.c_str();
     std::filesystem::path native;
-    if (const int error = ResolvePathError_nid_no_patch(path, native)) return PosixFailure(error);
+    if (const int error = ResolvePathError_nid_no_patch(path, native, true)) return PosixFailure(error);
     FileStat result{};
     if (!File::FillLinkStat(native, &result)) return PosixResult(SceErrorFromErrno(errno == ENOENT ? NotFoundError_nid_no_patch(native) : errno));
     if (!GuestCopyOut_nid_no_patch(sb, &result, sizeof(result))) return PosixFailure(GUEST_EFAULT);
