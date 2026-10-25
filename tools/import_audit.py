@@ -435,7 +435,7 @@ def audit_host_dependencies(direct, libraries, modules, windows=()):
         while stack:
             name, chain = stack.pop()
             name = strip_origin(name)
-            if chain[-2] in windows:
+            if strip_origin(chain[-2]) in windows:
                 matches = folded.get(name.lower(), ())
                 if len(matches) > 1:
                     raise AuditError(f"ambiguous Windows host library {name}: {', '.join(sorted(matches))}")

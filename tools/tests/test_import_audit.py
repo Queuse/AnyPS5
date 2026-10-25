@@ -1101,6 +1101,9 @@ class ImportAuditTests(unittest.TestCase):
         direct = {"host.prx": ["$ORIGIN/PROVIDER.PRX"], "Provider.prx": ["Missing.prx"]}
         expected[1]["chain"][1] = "Provider.prx"
         self.assertEqual(import_audit.audit_host_dependencies(direct, set(direct), set(), windows={"host.prx"}), expected)
+        direct = {"host.prx": ["$ORIGIN/Provider.prx"], "Provider.prx": ["leaf.prx"]}
+        self.assertEqual(import_audit.audit_host_dependencies(
+            direct, {*direct, "Leaf.prx"}, set(), windows={"Provider.prx"}), [])
 
     def test_origin_prefix_keeps_filename_suffix_boundaries(self):
         work = self.work
