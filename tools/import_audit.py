@@ -463,7 +463,7 @@ def module_files(directory):
             raise AuditError(f"{file}: expected ELF module (first bytes {magic!r})")
 
 
-def read_modules(directories, needed_names=()):
+def read_modules(directories, needed_names=(), *, windows=False):
     imports = {}
     exports = defaultdict(set)
     images = {}
@@ -496,8 +496,12 @@ def read_modules(directories, needed_names=()):
             for name in exported:
                 exports[name.split(MODULE_SUFFIX, 1)[0]].add(file.name)
     requested = set(needed_names) | {name for _, needed in imports.values() for name in needed}
+    filenames = ModuleNames(images, fold=windows)
+    folded_files = {name.lower() for name in images} if windows else set()
     for name in sorted(requested):
-        if name in aliases:
+        normalized = name.lower() if windows else name
+        file_suffix = any(len(normalized) > len(extension) and normalized.endswith(extension) for extension in MODULE_EXTENSIONS)
+        if name in aliases or normalized in folded_files or (file_suffix and name in filenames):
             continue
         suffix = next((extension for extension in MODULE_EXTENSIONS if name.endswith(extension)), "")
         stem = name[:-len(suffix)] if suffix else name
@@ -506,7 +510,7 @@ def read_modules(directories, needed_names=()):
             raise AuditError(f"ambiguous guest module identity {name}: " + ", ".join(str(file) for file in sorted(providers)))
         if providers:
             aliases[name] = next(iter(providers))
-    return imports, {name: sorted(files) for name, files in exports.items()}, set(aliases)
+    return imports, {name: sorted(files) for name, files in exports.items()}, ModuleNames(images, fold=windows, exact=aliases)
 
 
 def nids_of(name, aliases):
@@ -727,13 +731,15 @@ class ModuleNames(set):
     """Title module names, matched like the relinker: by the name without its .prx, .sprx, .suprx or .debug_prx suffix, and
     ignoring case for Windows output."""
 
-    def __init__(self, names=(), fold=False):
-        super().__init__(names)
+    def __init__(self, names=(), fold=False, *, exact=()):
+        names, exact = set(names), set(exact)
+        super().__init__(names | exact)
         self.fold = fold
-        self.stems = {module_stem(name, fold) for name in self}
+        self.exact = exact
+        self.stems = {module_stem(name, fold) for name in names}
 
     def __contains__(self, library):
-        return isinstance(library, str) and module_stem(library, self.fold) in self.stems
+        return isinstance(library, str) and (library in self.exact or module_stem(library, self.fold) in self.stems)
 
 
 def classify(nid, library, providers, stubs, modules, partial=frozenset()):
@@ -983,11 +989,10 @@ def main(argv=None):
         needed = sorted({library for path in dependency_registries for library in read_needed_registry(path)})
         exports, libraries = built_libraries(args.libs)
         host_dependencies, windows = built_host_dependencies(args.libs)
-        module_imports, module_exports, modules = read_modules(args.modules, set(needed) | {library for _, library, _ in imports if library})
+        module_imports, module_exports, modules = read_modules(args.modules, set(needed) | {library for _, library, _ in imports if library}, windows=bool(windows))
         host_modules = set(module_imports)
         host_modules |= {name.removesuffix(".guest.prx") for name in host_modules if name.endswith(".guest.prx")}
-        modules |= host_modules
-        modules = ModuleNames(modules, fold=bool(windows))
+        modules = ModuleNames(host_modules, fold=bool(windows), exact=modules.exact)
         stubs, partial = source_stub_classes(args.source)
         records, missing = audit(imports, exports, stubs, libraries, modules, module_imports, module_exports, needed_libraries=needed, windows_libraries=windows, partial=partial)
         missing_hosts = audit_host_dependencies(host_dependencies, libraries, host_modules, windows)

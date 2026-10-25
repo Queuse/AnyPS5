@@ -985,14 +985,48 @@ class ImportAuditTests(unittest.TestCase):
 
     def test_exact_module_filename_precedes_other_module_identities(self):
         work = self.work
-        (work.libs / "libc.prx").write_bytes(exporting())
         (work.modules / "Declared.prx").write_bytes(exporting())
         for file in ("first.prx", "second.prx"):
             (work.modules / file).write_bytes(build_elf([], module_names=[(0x61000043, "Declared")]))
-        registry = work.root / "game.json"
-        write_registry(registry, [("AAAAAAAAAAA", "Declared.prx")])
-        code, _, err = work.run(registry)
-        self.assertEqual((code, err), (0, ""))
+        registry, result = work.root / "game.registry.json", work.root / "audit.json"
+        for windows in (False, True):
+            (work.libs / "libc.prx").write_bytes(build_pe([]) if windows else exporting())
+            for suffix in (".prx", ".sprx", ".suprx", ".debug_prx"):
+                requested = ["Declared" + suffix]
+                if windows:
+                    requested += ["declared" + suffix, "DECLARED" + suffix.upper()]
+                for name in requested:
+                    with self.subTest(windows=windows, name=name):
+                        write_registry(registry, [("AAAAAAAAAAA", name)])
+                        import_audit.needed_registry_path(registry).write_text(json.dumps([name]), encoding="utf-8")
+                        code, _, err = work.run(registry, "--json", str(result))
+                        self.assertEqual((code, err), (0, ""))
+                        data = json.loads(result.read_text())
+                        self.assertEqual(data["missing_libraries"], {})
+                        self.assertEqual(data["references"], 1)
+                        self.assertEqual(data["imports"][0]["class"], "module")
+
+    def test_declared_aliases_do_not_inherit_windows_filename_matching(self):
+        work = self.work
+        (work.libs / "libc.prx").write_bytes(build_pe([]))
+        registry, result = work.root / "game.registry.json", work.root / "audit.json"
+        for tag in (14, 0x6100000d, 0x61000043):
+            declared = "Declared.prx" if tag == 14 else "Declared"
+            (work.modules / "Provider.prx").write_bytes(build_elf(
+                [("AAAAAAAAAAA", 1, GLOBAL_FUNCTION)], module_names=[(tag, declared)]))
+            invalid = ["declared.prx"] + (["Declared.sprx"] if tag == 14 else [])
+            for bad in invalid:
+                for requested in ([bad], ["Declared.prx", bad], [bad, "Declared.prx"]):
+                    with self.subTest(tag=hex(tag), requested=requested):
+                        write_registry(registry, [("AAAAAAAAAAA", name) for name in requested])
+                        import_audit.needed_registry_path(registry).write_text(json.dumps(requested), encoding="utf-8")
+                        code, _, err = work.run(registry, "--json", str(result))
+                        self.assertEqual((code, err), (1, ""))
+                        data = json.loads(result.read_text())
+                        self.assertEqual(data["references"], len(requested))
+                        self.assertEqual(data["missing_libraries"], {bad: 1})
+                        self.assertEqual({entry["library"]: entry["class"] for entry in data["imports"]},
+                                         {name: "absent" if name == bad else "module" for name in requested})
 
     def test_multiple_module_names_and_identical_files_do_not_repeat_imports(self):
         work = self.work
