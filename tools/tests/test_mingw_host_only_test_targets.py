@@ -194,7 +194,7 @@ class HostOnlyTargets(unittest.TestCase):
             )
 
     def test_invalid_dependency_entries_raise_controlled_errors(self):
-        source_root = Path(self.temporary.name)
+        source_root = Path(self.temporary.name).resolve()
         for dependencies in (None, "helper", [None], ["helper"], [{"id": ["helper"]}], [{}]):
             with self.subTest(dependencies=dependencies):
                 host = self.target("host_tests")
