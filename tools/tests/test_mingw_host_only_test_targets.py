@@ -119,7 +119,7 @@ class HostOnlyTargets(unittest.TestCase):
             "static_helper",
             target_type="STATIC_LIBRARY",
             source="core/libs/tests/StaticHelper.cpp",
-            dependencies=("helper_order",),
+            dependencies=("object_helper",),
         )
         static_helper["paths"]["source"] = "core/libs/tests"
         helper_order = self.target(
@@ -159,6 +159,34 @@ class HostOnlyTargets(unittest.TestCase):
             ),
             ["unrelated"],
         )
+
+    def test_ignores_order_only_product_and_utility_sources(self):
+        for kind in ("UTILITY", "SHARED_LIBRARY", "MODULE_LIBRARY"):
+            with self.subTest(kind=kind):
+                host = self.target("host_tests", dependencies=("order",))
+                order = self.target("order", target_type=kind, source="core/libs/prx/libkernel/Source.cpp",
+                                    dependencies=("hidden",))
+                hidden = self.target("hidden", target_type="OBJECT_LIBRARY", source="core/libs/src/Hidden.cpp")
+                root = Path(self.temporary.name).resolve()
+                targets = {item["id"]: item for item in (host, order, hidden)}
+                for changed in ("core/libs/prx/libkernel/Source.cpp", "core/libs/src/Hidden.cpp"):
+                    self.assertEqual(build_mingw_host_only_tests.host_only_test_targets(root, targets, [changed]), [])
+                self.assertEqual(build_mingw_host_only_tests.host_only_test_targets(
+                    root, targets, ["core/libs/tests/HostOnly.cpp"]), ["host_tests"])
+
+    def test_interface_sources_are_reached_and_invalid_source_paths_are_controlled(self):
+        host = self.target("host_tests", dependencies=("helper",))
+        helper = self.target("helper", target_type="INTERFACE_LIBRARY", source="core/libs/tests/Interface.cpp")
+        helper["paths"]["source"] = "core/libs/tests"
+        root = Path(self.temporary.name).resolve()
+        targets = {item["id"]: item for item in (host, helper)}
+        self.assertEqual(build_mingw_host_only_tests.host_only_test_targets(
+            root, targets, ["core/libs/tests/Interface.cpp"]), ["host_tests"])
+        for entry in ({}, {"path": None}, {"path": []}, {"path": ""}, None):
+            with self.subTest(entry=entry):
+                helper["sources"] = [entry]
+                with self.assertRaisesRegex(ValueError, "source"):
+                    build_mingw_host_only_tests.host_only_test_targets(root, targets, ["core/libs/tests/Interface.cpp"])
 
     def test_dependency_cycle_terminates(self):
         host = self.target("cyclic_tests", dependencies=("cycle_a",))

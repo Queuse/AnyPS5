@@ -107,6 +107,8 @@ def target_reached_sources(target, targets, source_root):
     while queue:
         current = queue.pop()
         for item in current.get("sources") or []:
+            if not isinstance(item, dict) or not isinstance(item.get("path"), str) or not item["path"]:
+                raise ValueError("invalid target source: expected an object with a nonempty path")
             if not item.get("isGenerated"):
                 relative = source_relative_path(source_root, source_root / item["path"])
                 if relative is not None:
@@ -118,9 +120,15 @@ def target_reached_sources(target, targets, source_root):
             dep_id = dep.get("id")
             if not isinstance(dep_id, str) or not dep_id or dep_id not in targets:
                 raise ValueError(f"unknown dependency target id: {dep_id}")
+            dependency = targets[dep_id]
+            kind = dependency.get("type")
+            if kind not in {"OBJECT_LIBRARY", "STATIC_LIBRARY", "INTERFACE_LIBRARY", "SHARED_LIBRARY", "MODULE_LIBRARY"}:
+                continue
+            if kind in {"SHARED_LIBRARY", "MODULE_LIBRARY"} and is_product_library(dependency, source_root):
+                continue
             if dep_id not in visited:
                 visited.add(dep_id)
-                queue.append(targets[dep_id])
+                queue.append(dependency)
     return reached
 
 
