@@ -111,6 +111,99 @@ class HostOnlyTargets(unittest.TestCase):
             ["guest_sigvec_modules_tests"],
         )
 
+    def test_selects_host_tests_when_transitive_dependency_source_changes(self):
+        host_a = self.target("host_a", dependencies=("static_helper",))
+        host_b = self.target("host_b", dependencies=("static_helper",))
+        unrelated = self.target("unrelated", dependencies=("unrelated_helper",), source="core/libs/tests/Unrelated.cpp")
+        static_helper = self.target(
+            "static_helper",
+            target_type="STATIC_LIBRARY",
+            source="core/libs/tests/StaticHelper.cpp",
+            dependencies=("helper_order",),
+        )
+        static_helper["paths"]["source"] = "core/libs/tests"
+        helper_order = self.target(
+            "helper_order",
+            target_type="UTILITY",
+            source="core/libs/tests/BuildInput.txt",
+            dependencies=("object_helper",),
+        )
+        object_helper = self.target(
+            "object_helper",
+            target_type="OBJECT_LIBRARY",
+            source="core/libs/src/Helper.cpp",
+        )
+        unrelated_helper = self.target(
+            "unrelated_helper",
+            target_type="STATIC_LIBRARY",
+            source="core/libs/tests/UnrelatedHelper.cpp",
+        )
+        unrelated_helper["paths"]["source"] = "core/libs/tests"
+        build_dir = self.fixture([host_a, host_b, unrelated, static_helper, helper_order, object_helper, unrelated_helper])
+        source_root, targets = build_mingw_host_only_tests.read_reply(build_dir)
+        self.assertEqual(
+            build_mingw_host_only_tests.host_only_test_targets(
+                source_root, targets, ["core/libs/src/Helper.cpp"]
+            ),
+            ["host_a", "host_b"],
+        )
+        self.assertEqual(
+            build_mingw_host_only_tests.host_only_test_targets(
+                source_root, targets, ["core/libs/tests/StaticHelper.cpp"]
+            ),
+            ["host_a", "host_b"],
+        )
+        self.assertEqual(
+            build_mingw_host_only_tests.host_only_test_targets(
+                source_root, targets, ["core/libs/tests/UnrelatedHelper.cpp"]
+            ),
+            ["unrelated"],
+        )
+
+    def test_dependency_cycle_terminates(self):
+        host = self.target("cyclic_tests", dependencies=("cycle_a",))
+        cycle_a = self.target(
+            "cycle_a",
+            target_type="STATIC_LIBRARY",
+            source="core/libs/tests/CycleA.cpp",
+            dependencies=("cycle_b",),
+        )
+        cycle_a["paths"]["source"] = "core/libs/tests"
+        cycle_b = self.target(
+            "cycle_b",
+            target_type="OBJECT_LIBRARY",
+            source="core/libs/src/CycleB.cpp",
+            dependencies=("cycle_a",),
+        )
+        build_dir = self.fixture([host, cycle_a, cycle_b])
+        source_root, targets = build_mingw_host_only_tests.read_reply(build_dir)
+        self.assertEqual(
+            build_mingw_host_only_tests.host_only_test_targets(
+                source_root, targets, ["core/libs/src/CycleB.cpp"]
+            ),
+            ["cyclic_tests"],
+        )
+
+    def test_fails_when_target_dependency_is_missing(self):
+        host = self.target("host_tests", dependencies=("missing_id",))
+        build_dir = self.fixture([host])
+        source_root, targets = build_mingw_host_only_tests.read_reply(build_dir)
+        with self.assertRaisesRegex(ValueError, "missing_id"):
+            build_mingw_host_only_tests.host_only_test_targets(
+                source_root, targets, ["core/libs/tests/HostOnly.cpp"]
+            )
+
+    def test_invalid_dependency_entries_raise_controlled_errors(self):
+        source_root = Path(self.temporary.name)
+        for dependencies in (None, "helper", [None], ["helper"], [{"id": ["helper"]}], [{}]):
+            with self.subTest(dependencies=dependencies):
+                host = self.target("host_tests")
+                host["dependencies"] = dependencies
+                with self.assertRaisesRegex(ValueError, "dependency"):
+                    build_mingw_host_only_tests.host_only_test_targets(
+                        source_root, {"host_tests": host}, ["core/libs/tests/HostOnly.cpp"]
+                    )
+
     def test_selects_only_changed_host_test_sources(self):
         first = self.target("first_tests")
         second = self.target("second_tests", source="core/libs/tests/Second.cpp")

@@ -98,8 +98,34 @@ def source_relative_path(source_root, source):
         return None
 
 
+def target_reached_sources(target, targets, source_root):
+    reached = set()
+    visited = set()
+    queue = [target]
+    if "id" in target:
+        visited.add(target["id"])
+    while queue:
+        current = queue.pop()
+        for item in current.get("sources") or []:
+            if not item.get("isGenerated"):
+                relative = source_relative_path(source_root, source_root / item["path"])
+                if relative is not None:
+                    reached.add(relative)
+        dependencies = current.get("dependencies", [])
+        if not isinstance(dependencies, list) or any(not isinstance(dep, dict) for dep in dependencies):
+            raise ValueError("invalid dependency list: expected a list of objects")
+        for dep in dependencies:
+            dep_id = dep.get("id")
+            if not isinstance(dep_id, str) or not dep_id or dep_id not in targets:
+                raise ValueError(f"unknown dependency target id: {dep_id}")
+            if dep_id not in visited:
+                visited.add(dep_id)
+                queue.append(targets[dep_id])
+    return reached
+
+
 def host_only_test_targets(source_root, targets, changed_paths=None):
-    selected = []
+    qualifying_targets = []
     for target in targets.values():
         if target.get("type") != "EXECUTABLE":
             continue
@@ -113,8 +139,8 @@ def host_only_test_targets(source_root, targets, changed_paths=None):
             continue
         if links_guest_libc(target) or links_product_library(target, targets, source_root):
             continue
-        selected.append(target["name"])
-    selected = sorted(set(selected), key=str.casefold)
+        qualifying_targets.append(target)
+    selected = sorted({target["name"] for target in qualifying_targets}, key=str.casefold)
     if changed_paths is None:
         return selected
     changed = {Path(path).as_posix() for path in changed_paths if path}
@@ -127,25 +153,12 @@ def host_only_test_targets(source_root, targets, changed_paths=None):
     )
     if broad_change:
         return selected
-    changed_source = {
-        relative
-        for target in targets.values()
-        if target.get("name") in selected
-        for item in target.get("sources", []) if not item.get("isGenerated")
-        for relative in [source_relative_path(source_root, source_root / item["path"])]
-        if relative is not None
-    }
-    matched_sources = changed & changed_source
-    if matched_sources:
-        return [
-            target["name"] for target in targets.values()
-            if target.get("name") in selected
-            and any(
-                source_relative_path(source_root, source_root / item["path"]) in matched_sources
-                for item in target.get("sources", []) if not item.get("isGenerated")
-            )
-        ]
-    return []
+    matched = []
+    for target in qualifying_targets:
+        sources = target_reached_sources(target, targets, source_root)
+        if changed & sources:
+            matched.append(target["name"])
+    return sorted(set(matched), key=str.casefold)
 
 
 def main(argv=None):
